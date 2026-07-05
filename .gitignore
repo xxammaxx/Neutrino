@@ -55,6 +55,9 @@ poetry.lock
 .env.*
 !.env.example
 
+# OpenCode runtime artifacts (local only)
+.opencode/
+
 # Secrets & Credentials (NEVER commit these)
 *.pem
 *.key
