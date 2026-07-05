@@ -37,7 +37,39 @@ Issues folgen dem Format aus dem [Issue Alignment Report](./docs/roadmap/NEUTRIN
 
 ## Code-Konventionen
 
-- Noch nicht definiert — werden in Phase 1 festgelegt.
+Siehe [CODE_CONVENTIONS.md](./docs/standards/CODE_CONVENTIONS.md) fuer die vollstaendigen Konventionen.
+
+### Kurzreferenz
+
+| Bereich | Tool / Regel |
+|---------|-------------|
+| Sprache | Python 3.11+ |
+| Package-Manager | `uv` (empfohlen) oder `poetry` |
+| Linting | `ruff` |
+| Formatting | `ruff format` |
+| Type Checking | `mypy --strict` |
+| Testing | `pytest` + `pytest-cov` (80% Coverage Minimum) |
+| Test Runner | `nox` |
+| Commit-Stil | [Conventional Commits](https://www.conventionalcommits.org/) mit Scope-Praefix |
+| Projekt-Layout | `src/neutrino/` + `tests/` |
+
+### Quickstart
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,test]"
+pre-commit install
+nox
+```
+
+### Safety-Regeln fuer Code
+
+- **Keine aktiven Tests gegen reale Ziele** — Nur Mock-HTTP / lokale Labs
+- **Keine Secrets im Code** — Umgebungsvariablen oder `.env` (nicht committet)
+- **Keine `eval()` / `exec()`** im Produktionscode
+- **Netzwerk-Requests nur ueber ScopeGuard**
+- **UNKNOWN = Blockieren** — Im Zweifel konservativ entscheiden
 
 ## License
 

@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing & Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Nox
+.nox/
+
+# uv
+uv.lock
+
+# Poetry (if chosen)
+poetry.lock
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Secrets & Credentials (NEVER commit these)
+*.pem
+*.key
+*.crt
+credentials.json
+secrets.yaml
+*.secret
+
+# Logs
+*.log
+logs/
+
+# OS
+Thumbs.db
+ehthumbs.db
+
+# Docker (optional, later phases)
+.docker/
+
+# Temporary
+tmp/
+temp/
+*.tmp
