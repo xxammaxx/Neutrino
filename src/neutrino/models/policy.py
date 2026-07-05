@@ -7,7 +7,6 @@ All models use Pydantic for validation and serialization.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -16,15 +15,23 @@ class ScopeEntry(BaseModel):
     """A single scope entry — represents one in-scope or out-of-scope asset.
 
     Attributes:
-        pattern: The domain, IP range, or identifier (e.g., "*.example.com").
-        type: Asset type — "domain", "ip_range", "mobile_app", "api", "unknown".
+        pattern: The domain, IP range, URL, or identifier (e.g., "*.example.com").
+        type: Asset type — "domain", "wildcard_domain", "ip_range", "url", "api", "unknown".
+        is_wildcard: Whether this entry contains a wildcard (e.g., "*.example.com").
         description: Optional human-readable description from the policy.
+        source_section: Which policy section this entry was extracted from ("in_scope", "out_of_scope").
         bounty_eligible: Whether this asset is eligible for bounty rewards.
     """
 
     pattern: str
     type: str = Field(default="domain", description="Asset type")
-    description: Optional[str] = Field(default=None, description="Human-readable description")
+    is_wildcard: bool = Field(
+        default=False, description="Pattern contains a wildcard (e.g. *.example.com)"
+    )
+    description: str | None = Field(default=None, description="Human-readable description")
+    source_section: str | None = Field(
+        default=None, description="Policy section of origin (in_scope, out_of_scope)"
+    )
     bounty_eligible: bool = Field(default=False, description="Bounty-eligible asset")
 
     def matches(self, target: str) -> bool:
@@ -58,16 +65,10 @@ class ScopeEntry(BaseModel):
             parts = normalized.split(".")
             base_parts = base_domain.split(".")
             # The target must end with the base domain and have exactly ONE extra label
-            if len(parts) == len(base_parts) + 1:
-                if parts[-len(base_parts) :] == base_parts:
-                    return True
-            return False
+            return len(parts) == len(base_parts) + 1 and parts[-len(base_parts) :] == base_parts
 
         # Subdomain match: "example.com" matches "sub.example.com"
-        if normalized.endswith("." + pattern_lower):
-            return True
-
-        return False
+        return normalized.endswith("." + pattern_lower)
 
 
 class RateLimit(BaseModel):
@@ -80,9 +81,9 @@ class RateLimit(BaseModel):
         auto_throttle: Whether to automatically throttle to these limits.
     """
 
-    requests_per_second: Optional[float] = Field(default=None, ge=0)
-    requests_per_hour: Optional[int] = Field(default=None, ge=0)
-    concurrent_requests: Optional[int] = Field(default=None, ge=0)
+    requests_per_second: float | None = Field(default=None, ge=0)
+    requests_per_hour: int | None = Field(default=None, ge=0)
+    concurrent_requests: int | None = Field(default=None, ge=0)
     auto_throttle: bool = Field(default=True)
 
 
@@ -120,11 +121,11 @@ class ScopePolicy(BaseModel):
 
     source_url: str
     source_fetched_at: datetime = Field(default_factory=datetime.utcnow)
-    program_name: Optional[str] = Field(default=None)
-    platform: Optional[str] = Field(default=None)
+    program_name: str | None = Field(default=None)
+    platform: str | None = Field(default=None)
     in_scope: list[ScopeEntry] = Field(default_factory=list)
     out_of_scope: list[ScopeEntry] = Field(default_factory=list)
-    rate_limits: Optional[RateLimit] = Field(default=None)
+    rate_limits: RateLimit | None = Field(default=None)
     rules: list[PolicyRule] = Field(default_factory=list)
     raw_text: str = Field(default="", description="Original policy text for audit trail")
 
@@ -146,13 +147,8 @@ class ScopePolicy(BaseModel):
             if entry.matches(target):
                 return False
 
-        # Then check in_scope
-        for entry in self.in_scope:
-            if entry.matches(target):
-                return True
-
-        # Default Deny: not in scope
-        return False
+        # Then check in_scope — Default Deny if no match
+        return any(entry.matches(target) for entry in self.in_scope)
 
     def has_blocking_rules(self) -> bool:
         """Check if the policy contains any blocking rules.

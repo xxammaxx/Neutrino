@@ -23,6 +23,8 @@
 | Git-Status | clean (keine uncommitteten Änderungen) |
 | Python-Version | 3.12.3 (system), 3.12.3 (venv) |
 
+> **Hinweis:** Die ursprüngliche Reality-Refresh-Erhebung erfolgte auf `ec59ce7`, bevor der Sync-Report selbst mit Commit `8554d05` committed wurde. Der finale Sync-Commit, der diesen Report auf `main` brachte, ist `8554d05` (2026-07-05).
+
 ### Commits auf `main`
 
 | Commit | Beschreibung | Issue |

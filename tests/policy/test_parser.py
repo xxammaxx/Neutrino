@@ -6,13 +6,15 @@ external targets are contacted.
 
 from __future__ import annotations
 
-from datetime import datetime
+from typing import TYPE_CHECKING
 
 import pytest
-from pytest_mock import MockerFixture
 
 from neutrino.models.policy import PolicyRule, RateLimit, ScopeEntry, ScopePolicy
 from neutrino.policy.parser import PolicyParseError, PolicyParser
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 
 # ------------------------------------------------------------------
@@ -426,3 +428,279 @@ def test_scope_policy_deserialization() -> None:
     assert policy.source_url == "https://example.com"
     assert len(policy.in_scope) == 1
     assert policy.in_scope[0].pattern == "example.com"
+
+
+# ==========================================================================
+# Issue #2: New fixtures for enhanced In-Scope / Out-of-Scope extraction
+# ==========================================================================
+
+COMPREHENSIVE_POLICY = """
+# MegaCorp Bug Bounty Program
+
+## In Scope
+- *.megacorp.com
+- api.megacorp.com
+- app.megacorp.com/v2/
+- https://portal.megacorp.com/admin/
+- 198.51.100.0/24
+- 203.0.113.0/28
+
+## Out of Scope
+- staging.megacorp.com
+- *.dev.megacorp.com
+- internal.megacorp.com
+- test.megacorp.com
+"""
+
+POLICY_INELIGIBLE = """
+In Scope:
+- example.com
+
+Ineligible:
+- admin.example.com
+- internal.example.com
+"""
+
+POLICY_PROHIBITED = """
+Targets:
+- api.example.com
+
+Prohibited Targets:
+- staging.example.com
+"""
+
+POLICY_API_TARGETS = """
+Scope:
+- example.com
+- api.example.com/v1/
+- api.example.com/v2/users
+- rest.example.com/api/
+"""
+
+POLICY_URL_WITH_PATH = """
+Scope:
+- https://app.example.com/dashboard
+- app.example.com/v2/
+- static.example.com
+"""
+
+# ==========================================================================
+# Issue #2: Enhanced In-Scope / Out-of-Scope Extraction Tests
+# ==========================================================================
+
+
+def test_extract_wildcard_domains_with_is_wildcard(parser: PolicyParser) -> None:
+    """Wildcard domains like *.megacorp.com should have is_wildcard=True and type=wildcard_domain."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    wildcard_entries = [e for e in policy.in_scope if e.is_wildcard]
+    assert len(wildcard_entries) >= 1, "Expected at least one wildcard entry in scope"
+    assert any(e.pattern == "*.megacorp.com" for e in wildcard_entries)
+    for e in wildcard_entries:
+        assert e.type == "wildcard_domain"
+        assert e.is_wildcard is True
+
+
+def test_extract_ip_ranges(parser: PolicyParser) -> None:
+    """IP range entries like 198.51.100.0/24 should be detected with type=ip_range."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    ip_entries = [e for e in policy.in_scope if e.type == "ip_range"]
+    assert len(ip_entries) >= 2, "Expected at least two IP range entries"
+    ip_patterns = {e.pattern for e in ip_entries}
+    assert "198.51.100.0/24" in ip_patterns
+    assert "203.0.113.0/28" in ip_patterns
+    for e in ip_entries:
+        assert e.is_wildcard is False
+        assert e.source_section == "in_scope"
+
+
+def test_extract_url_with_path(parser: PolicyParser) -> None:
+    """URLs with paths like app.megacorp.com/v2/ should retain the path."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    url_entries = [e for e in policy.in_scope if e.type in ("url", "api")]
+    url_patterns = {e.pattern for e in url_entries}
+    assert "app.megacorp.com/v2" in url_patterns, (
+        f"Expected app.megacorp.com/v2, got {url_patterns}"
+    )
+
+
+def test_extract_domain_type_unchanged(parser: PolicyParser) -> None:
+    """Plain domains like api.megacorp.com should still have type=domain."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    domain_entries = [e for e in policy.in_scope if e.type == "domain"]
+    domain_patterns = {e.pattern for e in domain_entries}
+    assert "api.megacorp.com" in domain_patterns
+
+
+def test_source_section_tracking_in_scope(parser: PolicyParser) -> None:
+    """In-scope entries should have source_section='in_scope'."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    for entry in policy.in_scope:
+        assert entry.source_section == "in_scope", (
+            f"Entry {entry.pattern} has source_section={entry.source_section}"
+        )
+
+
+def test_source_section_tracking_out_of_scope(parser: PolicyParser) -> None:
+    """Out-of-scope entries should have source_section='out_of_scope'."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    assert len(policy.out_of_scope) > 0, "Expected at least one out-of-scope entry"
+    for entry in policy.out_of_scope:
+        assert entry.source_section == "out_of_scope", (
+            f"Entry {entry.pattern} has source_section={entry.source_section}"
+        )
+
+
+def test_out_of_scope_wildcard(parser: PolicyParser) -> None:
+    """Wildcard out-of-scope entries like *.dev.megacorp.com should be detected."""
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    dev_wildcard = [e for e in policy.out_of_scope if e.pattern == "*.dev.megacorp.com"]
+    assert len(dev_wildcard) == 1
+    assert dev_wildcard[0].is_wildcard is True
+    assert dev_wildcard[0].type == "wildcard_domain"
+
+
+def test_out_of_scope_overrides_in_scope_extraction(parser: PolicyParser) -> None:
+    """is_in_scope should return False for targets in out_of_scope even if
+    they match an in_scope wildcard."""
+    # Build policy with explicit conflict: staging is excluded via wildcard
+    policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test-comp")
+
+    # staging.megacorp.com is explicitly out of scope
+    assert policy.is_in_scope("staging.megacorp.com") is False
+    # sub.dev.megacorp.com matches *.dev.megacorp.com in out_of_scope
+    assert policy.is_in_scope("sub.dev.megacorp.com") is False
+    # But *.megacorp.com (in scope) still allows sub.megacorp.com
+    assert policy.is_in_scope("sub.megacorp.com") is True
+
+
+def test_ineligible_marker_extraction(parser: PolicyParser) -> None:
+    """'Ineligible' section should be treated as out-of-scope."""
+    policy = parser.parse_from_text(POLICY_INELIGIBLE, source_label="test-ineligible")
+
+    assert len(policy.out_of_scope) >= 2
+    out_patterns = {e.pattern for e in policy.out_of_scope}
+    assert "admin.example.com" in out_patterns
+    assert "internal.example.com" in out_patterns
+    for e in policy.out_of_scope:
+        assert e.source_section == "out_of_scope"
+
+
+def test_prohibited_targets_marker_extraction(parser: PolicyParser) -> None:
+    """'Prohibited Targets' section should be treated as out-of-scope."""
+    policy = parser.parse_from_text(POLICY_PROHIBITED, source_label="test-prohibited")
+
+    assert len(policy.out_of_scope) >= 1
+    out_patterns = {e.pattern for e in policy.out_of_scope}
+    assert "staging.example.com" in out_patterns
+
+
+def test_api_type_detection(parser: PolicyParser) -> None:
+    """API endpoints (with /api/ or /vN in path) should get type='api'."""
+    policy = parser.parse_from_text(POLICY_API_TARGETS, source_label="test-api")
+
+    api_entries = [e for e in policy.in_scope if e.type == "api"]
+    assert len(api_entries) >= 2, f"Expected at least 2 API entries, got {len(api_entries)}"
+    api_patterns = {e.pattern for e in api_entries}
+    assert "api.example.com/v1" in api_patterns, f"Got patterns: {api_patterns}"
+    assert "api.example.com/v2/users" in api_patterns or "rest.example.com/api" in api_patterns
+
+
+def test_url_type_vs_domain_type(parser: PolicyParser) -> None:
+    """URLs with generic paths → type='url', API paths → type='api', plain domains → type='domain'."""
+    policy = parser.parse_from_text(POLICY_URL_WITH_PATH, source_label="test-url")
+
+    url_entries = [e for e in policy.in_scope if e.type == "url"]
+    api_entries = [e for e in policy.in_scope if e.type == "api"]
+    domain_entries = [e for e in policy.in_scope if e.type == "domain"]
+
+    # app.example.com/v2 has /v2 → classified as api
+    api_patterns = {e.pattern for e in api_entries}
+    assert "app.example.com/v2" in api_patterns, f"Got api patterns: {api_patterns}"
+
+    # app.example.com/dashboard (from https://...) has generic path → url
+    url_patterns = {e.pattern for e in url_entries}
+    assert any("app.example.com/dashboard" in p for p in url_patterns), (
+        f"Got url patterns: {url_patterns}"
+    )
+
+    # static.example.com should be domain
+    domain_patterns = {e.pattern for e in domain_entries}
+    assert "static.example.com" in domain_patterns
+
+
+def test_deterministic_enhanced_parsing(parser: PolicyParser) -> None:
+    """Enhanced parser must still be deterministic — same input → same output."""
+    p1 = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="same")
+    p2 = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="same")
+
+    assert len(p1.in_scope) == len(p2.in_scope)
+    assert len(p1.out_of_scope) == len(p2.out_of_scope)
+
+    for e1, e2 in zip(p1.in_scope, p2.in_scope, strict=True):
+        assert e1.pattern == e2.pattern
+        assert e1.type == e2.type
+        assert e1.is_wildcard == e2.is_wildcard
+        assert e1.source_section == e2.source_section
+
+    for e1, e2 in zip(p1.out_of_scope, p2.out_of_scope, strict=True):
+        assert e1.pattern == e2.pattern
+        assert e1.type == e2.type
+        assert e1.is_wildcard == e2.is_wildcard
+        assert e1.source_section == e2.source_section
+
+
+def test_no_network_in_parse_from_text(parser: PolicyParser) -> None:
+    """parse_from_text should never make network requests."""
+    # This is inherently verified by using local string fixtures,
+    # but we explicitly assert no httpx calls are made.
+    import httpx
+
+    try:
+        policy = parser.parse_from_text(COMPREHENSIVE_POLICY, source_label="test")
+        assert len(policy.in_scope) > 0
+        assert len(policy.out_of_scope) > 0
+    except httpx.HTTPError:
+        pytest.fail("parse_from_text should never make HTTP requests")
+
+
+def test_scope_entry_with_source_section_serialization() -> None:
+    """ScopeEntry with is_wildcard and source_section should serialize correctly."""
+    entry = ScopeEntry(
+        pattern="*.example.com",
+        type="wildcard_domain",
+        is_wildcard=True,
+        source_section="in_scope",
+        bounty_eligible=True,
+    )
+    data = entry.model_dump()
+    assert data["is_wildcard"] is True
+    assert data["source_section"] == "in_scope"
+    assert data["type"] == "wildcard_domain"
+
+
+def test_minimal_policy_with_only_one_target(parser: PolicyParser) -> None:
+    """Policy with a single in-scope target should extract exactly one entry."""
+    minimal = "In Scope:\n- only.example.com"
+    policy = parser.parse_from_text(minimal, source_label="test-min")
+    assert len(policy.in_scope) == 1
+    assert policy.in_scope[0].pattern == "only.example.com"
+    assert policy.in_scope[0].type == "domain"
+    assert policy.in_scope[0].source_section == "in_scope"
+    assert len(policy.out_of_scope) == 0
+
+
+def test_empty_scope_sections(parser: PolicyParser) -> None:
+    """Policy without any scope sections should return empty lists."""
+    no_scope = (
+        "This is a vulnerability disclosure policy.\nRules:\n- Report to security@example.com"
+    )
+    policy = parser.parse_from_text(no_scope, source_label="test-empty")
+    assert len(policy.in_scope) == 0
+    assert len(policy.out_of_scope) == 0

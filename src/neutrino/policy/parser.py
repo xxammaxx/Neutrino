@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
@@ -21,7 +20,7 @@ from neutrino.models.policy import PolicyRule, RateLimit, ScopeEntry, ScopePolic
 class PolicyParseError(Exception):
     """Raised when policy parsing fails for any reason."""
 
-    def __init__(self, message: str, cause: Optional[Exception] = None) -> None:
+    def __init__(self, message: str, cause: Exception | None = None) -> None:
         super().__init__(message)
         self.cause = cause
 
@@ -36,12 +35,6 @@ class PolicyParser:
 
     All parsing is regex-based. No LLM, no semantic analysis.
     """
-
-    # Common patterns found in bug bounty policy pages
-    _DOMAIN_PATTERN = re.compile(
-        r"(?:(?:https?://)?(?:\*\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
-        r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(?:\.[a-zA-Z]{2,}))"
-    )
 
     _RATE_LIMIT_PATTERNS = [
         (
@@ -154,7 +147,7 @@ class PolicyParser:
         clean = clean.strip()
         return clean
 
-    def _extract_program_name(self, text: str) -> Optional[str]:
+    def _extract_program_name(self, text: str) -> str | None:
         """Try to extract the program name from the text.
 
         Heuristic: Look for common header patterns.
@@ -181,7 +174,7 @@ class PolicyParser:
         """Extract in-scope assets from policy text.
 
         Looks for sections labeled "In Scope", "Scope", "Targets", etc.
-        and extracts domain patterns from them.
+        and extracts domain, IP, URL, and wildcard patterns from them.
         """
         section = self._find_section(
             text,
@@ -198,7 +191,7 @@ class PolicyParser:
         if not section:
             return []
 
-        entries = self._extract_domain_entries(section)
+        entries = self._extract_scope_entries(section, source_section="in_scope")
         # Deduplicate by pattern
         seen: set[str] = set()
         deduped: list[ScopeEntry] = []
@@ -211,11 +204,21 @@ class PolicyParser:
     def _extract_out_of_scope(self, text: str) -> list[ScopeEntry]:
         """Extract out-of-scope assets from policy text.
 
-        Looks for sections labeled "Out of Scope", "Exclusions", etc.
+        Looks for sections labeled "Out of Scope", "Exclusions",
+        "Ineligible", "Prohibited Targets", etc.
         """
         section = self._find_section(
             text,
-            start_markers=["out of scope", "out-of-scope", "exclusion", "not in scope", "excluded"],
+            start_markers=[
+                "out of scope",
+                "out-of-scope",
+                "exclusion",
+                "not in scope",
+                "excluded",
+                "ineligible",
+                "prohibited targets",
+                "not eligible",
+            ],
             end_markers=[
                 "rules",
                 "requirements",
@@ -228,21 +231,41 @@ class PolicyParser:
         if not section:
             return []
 
-        return self._extract_domain_entries(section)
+        entries = self._extract_scope_entries(section, source_section="out_of_scope")
+        # Deduplicate by pattern
+        seen: set[str] = set()
+        deduped: list[ScopeEntry] = []
+        for entry in entries:
+            if entry.pattern.lower() not in seen:
+                seen.add(entry.pattern.lower())
+                deduped.append(entry)
+        return deduped
 
-    def _extract_rate_limits(self, text: str) -> Optional[RateLimit]:
+    def _extract_rate_limits(self, text: str) -> RateLimit | None:
         """Extract rate-limit information from policy text."""
-        kwargs: dict = {}
+        rps: float | None = None
+        rph: int | None = None
+        concurrent: int | None = None
+
         for pattern, key in self._RATE_LIMIT_PATTERNS:
             match = pattern.search(text)
             if match:
                 value = float(match.group(1)) if "." in match.group(1) else int(match.group(1))
-                kwargs[key] = value
+                if key == "requests_per_second":
+                    rps = float(value)
+                elif key == "requests_per_hour":
+                    rph = int(value)
+                elif key == "concurrent_requests":
+                    concurrent = int(value)
 
-        if not kwargs:
+        if rps is None and rph is None and concurrent is None:
             return None
 
-        return RateLimit(**kwargs)
+        return RateLimit(
+            requests_per_second=rps,
+            requests_per_hour=rph,
+            concurrent_requests=concurrent,
+        )
 
     def _extract_rules(self, text: str) -> list[PolicyRule]:
         """Extract testing rules from policy text.
@@ -307,9 +330,7 @@ class PolicyParser:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _find_section(
-        text: str, *, start_markers: list[str], end_markers: list[str]
-    ) -> Optional[str]:
+    def _find_section(text: str, *, start_markers: list[str], end_markers: list[str]) -> str | None:
         """Find a section of text between start and end markers.
 
         Args:
@@ -348,33 +369,116 @@ class PolicyParser:
 
         return text[section_start:end_idx].strip()
 
+    # ------------------------------------------------------------------
+    # Regex patterns for scope extraction (compiled once at class level)
+    # ------------------------------------------------------------------
+
+    _IP_RANGE_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2})\b")
+
+    _URL_PATTERN = re.compile(
+        r"(?:(?:https?://)?(?:\*\.)?"
+        r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+"
+        r"[a-zA-Z]{2,}"
+        r"(?:/[^\s,;)\]]*)?)"
+    )
+
+    _DOMAIN_PATTERN_SIMPLE = re.compile(
+        r"(?:(?:https?://)?(?:\*\.)?"
+        r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+"
+        r"[a-zA-Z]{2,})"
+    )
+
     @staticmethod
-    def _extract_domain_entries(text: str) -> list[ScopeEntry]:
-        """Extract domain-like entries from text using regex.
+    def _extract_scope_entries(text: str, *, source_section: str = "unknown") -> list[ScopeEntry]:
+        """Extract scope entries (domains, IPs, URLs, wildcards) from text.
+
+        Processes the text line-by-line to capture IP ranges, URLs with paths,
+        wildcard domains, and plain domains. Each entry is classified with an
+        appropriate asset type and source section reference.
 
         Args:
-            text: The section text to extract domains from.
+            text: The section text to extract entries from.
+            source_section: Label for the policy section (e.g. "in_scope",
+                "out_of_scope") — preserved on each entry for audit.
 
         Returns:
-            List of ScopeEntry objects for found domains.
+            List of ScopeEntry objects for all recognised patterns.
         """
         entries: list[ScopeEntry] = []
-        domain_pattern = re.compile(
-            r"(?:(?:https?://)?(?:\*\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,})"
-        )
 
-        for match in domain_pattern.finditer(text):
-            domain = match.group(0)
-            # Normalize: strip protocol
-            if "://" in domain:
-                domain = domain.split("://", 1)[1]
-            entries.append(
-                ScopeEntry(
-                    pattern=domain.strip(),
-                    type="domain",
-                    bounty_eligible=True,  # Assume: if listed in scope, it's eligible
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # Strip common bullet / list markers
+            line_clean = re.sub(r"^[-*••]\s*", "", line).strip()
+            if not line_clean:
+                continue
+
+            # --- 1) IP range ---
+            ip_match = PolicyParser._IP_RANGE_PATTERN.search(line_clean)
+            if ip_match:
+                entries.append(
+                    ScopeEntry(
+                        pattern=ip_match.group(1),
+                        type="ip_range",
+                        is_wildcard=False,
+                        source_section=source_section,
+                        bounty_eligible=(source_section == "in_scope"),
+                    )
                 )
-            )
+                continue
+
+            # --- 2) URL (domain with optional path) ---
+            url_match = PolicyParser._URL_PATTERN.search(line_clean)
+            if url_match:
+                raw = url_match.group(0)
+                # Normalize: strip protocol
+                if "://" in raw:
+                    raw = raw.split("://", 1)[1]
+
+                raw = raw.rstrip("/")
+                is_wildcard = raw.startswith("*.")
+                has_path = "/" in raw
+
+                if is_wildcard:
+                    entry_type = "wildcard_domain"
+                elif has_path and ("/api" in raw.lower() or "/v" in raw):
+                    entry_type = "api"
+                elif has_path:
+                    entry_type = "url"
+                else:
+                    entry_type = "domain"
+
+                entries.append(
+                    ScopeEntry(
+                        pattern=raw.strip(),
+                        type=entry_type,
+                        is_wildcard=is_wildcard,
+                        source_section=source_section,
+                        bounty_eligible=(source_section == "in_scope"),
+                    )
+                )
+                continue
+
+            # --- 3) Plain domain (fallback) ---
+            domain_match = PolicyParser._DOMAIN_PATTERN_SIMPLE.search(line_clean)
+            if domain_match:
+                domain = domain_match.group(0)
+                if "://" in domain:
+                    domain = domain.split("://", 1)[1]
+                domain = domain.strip()
+                is_wildcard = domain.startswith("*.")
+                entries.append(
+                    ScopeEntry(
+                        pattern=domain,
+                        type="wildcard_domain" if is_wildcard else "domain",
+                        is_wildcard=is_wildcard,
+                        source_section=source_section,
+                        bounty_eligible=(source_section == "in_scope"),
+                    )
+                )
 
         return entries
 
