@@ -14,7 +14,7 @@ from datetime import datetime
 
 import httpx
 
-from neutrino.models.policy import PolicyRule, RateLimit, ScopeEntry, ScopePolicy
+from neutrino.models.policy import AutomationPolicy, PolicyRule, RateLimit, ScopeEntry, ScopePolicy
 
 
 class PolicyParseError(Exception):
@@ -44,8 +44,16 @@ class PolicyParser:
             "requests_per_second",
         ),
         (
+            re.compile(r"(\d+)\s*(?:requests?\s*per\s*minute|reqs?/m(?:in)?)", re.IGNORECASE),
+            "requests_per_minute",
+        ),
+        (
             re.compile(r"(\d+)\s*(?:requests?\s*per\s*hour|reqs?/h(?:our)?)", re.IGNORECASE),
             "requests_per_hour",
+        ),
+        (
+            re.compile(r"(\d+)\s*(?:requests?\s*per\s*day|reqs?/d(?:ay)?)", re.IGNORECASE),
+            "requests_per_day",
         ),
         (re.compile(r"(\d+)\s*concurrent\s*requests?", re.IGNORECASE), "concurrent_requests"),
     ]
@@ -111,6 +119,9 @@ class PolicyParser:
             out_of_scope=self._extract_out_of_scope(clean_text),
             rate_limits=self._extract_rate_limits(clean_text),
             rules=self._extract_rules(clean_text),
+            automation_policy=self._extract_automation_policy(clean_text),
+            allowed_test_types=self._extract_test_types(clean_text, kind="allowed"),
+            prohibited_test_types=self._extract_test_types(clean_text, kind="prohibited"),
             raw_text=text,
         )
 
@@ -244,7 +255,9 @@ class PolicyParser:
     def _extract_rate_limits(self, text: str) -> RateLimit | None:
         """Extract rate-limit information from policy text."""
         rps: float | None = None
+        rpm: int | None = None
         rph: int | None = None
+        rpd: int | None = None
         concurrent: int | None = None
 
         for pattern, key in self._RATE_LIMIT_PATTERNS:
@@ -253,19 +266,206 @@ class PolicyParser:
                 value = float(match.group(1)) if "." in match.group(1) else int(match.group(1))
                 if key == "requests_per_second":
                     rps = float(value)
+                elif key == "requests_per_minute":
+                    rpm = int(value)
                 elif key == "requests_per_hour":
                     rph = int(value)
+                elif key == "requests_per_day":
+                    rpd = int(value)
                 elif key == "concurrent_requests":
                     concurrent = int(value)
 
-        if rps is None and rph is None and concurrent is None:
+        if rps is None and rpm is None and rph is None and rpd is None and concurrent is None:
             return None
 
         return RateLimit(
             requests_per_second=rps,
+            requests_per_minute=rpm,
             requests_per_hour=rph,
+            requests_per_day=rpd,
             concurrent_requests=concurrent,
         )
+
+    def _extract_automation_policy(self, text: str) -> AutomationPolicy:
+        """Extract automation policy from policy text.
+
+        Conservative rules:
+        - If automation is explicitly prohibited → "prohibited"
+        - If automation requires prior approval → "requires_approval"
+        - If automation is explicitly allowed → "allowed"
+        - If nothing found → "unknown"
+        - Contradictory statements → most restrictive wins
+        """
+
+        prohibited_patterns = [
+            re.compile(
+                r"automated\s+(?:scanning|testing|tools?|scanners?)\s+(?:is|are)\s+prohibited",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"(?:do\s+not|no|never)\s+(?:use\s+)?automated\s+(?:scanning|testing|tools?|scanners?)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"automated\s+(?:scanning|testing|tools?|scanners?)\s+(?:is|are)\s+not\s+(?:allowed|permitted)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"prohibit(?:ed|s)\s+automated\s+(?:scanning|testing|tools?)", re.IGNORECASE
+            ),
+            re.compile(
+                r"without\s+(?:prior|explicit)\s+(?:written\s+)?(?:permission|approval|consent|authori[sz]ation)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"no\s+automated\s+(?:tools?|scanning|testing)\s+(?:without|unless)", re.IGNORECASE
+            ),
+        ]
+
+        requires_approval_patterns = [
+            re.compile(
+                r"automated\s+(?:testing|scanning|tools?)\s+(?:requires?|needs?|must\s+have)\s+(?:prior|explicit|written)\s+(?:approval|permission|consent|authori[sz]ation)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"requires?\s+(?:prior|explicit|written)\s+(?:approval|permission|consent|authori[sz]ation)\s+(?:for|to\s+use)\s+automated",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"automated\s+(?:testing|scanning|tools?)\s+(?:is|are)\s+permitted\s+(?:only|solely)\s+with\s+(?:prior|explicit|written)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"must\s+(?:obtain|get|have|seek)\s+(?:prior|explicit|written)\s+(?:written\s+)?(?:approval|permission)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"contact\s+(?:us|the\s+team)\s+(?:before|prior\s+to)\s+(?:automated|using\s+automated)",
+                re.IGNORECASE,
+            ),
+        ]
+
+        allowed_patterns = [
+            re.compile(
+                r"automated\s+(?:testing|scanning|tools?)\s+(?:is|are)\s+(?:allowed|permitted|welcome|encouraged)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"automation\s+(?:is|are)\s+(?:allowed|permitted|welcome|encouraged)", re.IGNORECASE
+            ),
+            re.compile(
+                r"(?:you\s+may|feel\s+free\s+to)\s+use\s+automated\s+(?:testing|scanning|tools?)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"automated\s+(?:testing|scanning|tools?)\s+(?:is|are)\s+(?:allowed|permitted)\s+within\s+(?:the\s+)?(?:published|rate\s+limit)",
+                re.IGNORECASE,
+            ),
+        ]
+
+        # Check prohibited first (highest priority)
+        for pattern in prohibited_patterns:
+            match = pattern.search(text)
+            if match:
+                return AutomationPolicy(status="prohibited", evidence=match.group(0))
+
+        # Check "without prior approval" patterns -- these are prohibited
+        # unless paired with a "can be allowed" clause
+        for pattern in prohibited_patterns[4:]:  # The last two patterns relate to approval
+            match = pattern.search(text)
+            if match:
+                return AutomationPolicy(status="prohibited", evidence=match.group(0))
+
+        # Check requires_approval
+        for pattern in requires_approval_patterns:
+            match = pattern.search(text)
+            if match:
+                return AutomationPolicy(status="requires_approval", evidence=match.group(0))
+
+        # Check allowed (lowest priority — only if nothing restrictive matched)
+        for pattern in allowed_patterns:
+            match = pattern.search(text)
+            if match:
+                return AutomationPolicy(status="allowed", evidence=match.group(0))
+
+        # Default: unknown
+        return AutomationPolicy(status="unknown")
+
+    _KNOWN_PROHIBITED_TEST_TYPES: dict[str, re.Pattern[str]] = {
+        "brute_force": re.compile(r"(?:brute[\s-]*force|bruteforce)", re.IGNORECASE),
+        "credential_stuffing": re.compile(r"credential[\s-]*stuffing", re.IGNORECASE),
+        "social_engineering": re.compile(r"social[\s-]*engineering", re.IGNORECASE),
+        "phishing": re.compile(r"phishing", re.IGNORECASE),
+        "spam": re.compile(r"\bspam\b", re.IGNORECASE),
+        "ddos": re.compile(r"\bddos\b|denial[\s-]*of[\s-]*service", re.IGNORECASE),
+        "destructive_testing": re.compile(r"destructive[\s-]*testing", re.IGNORECASE),
+        "physical_attacks": re.compile(r"physical[\s-]*(?:attack|access|security)", re.IGNORECASE),
+        "data_exfiltration": re.compile(
+            r"(?:data[\s-]*exfiltration|exfiltrate?\s+(?:data|information))", re.IGNORECASE
+        ),
+        "accessing_user_data": re.compile(
+            r"access(?:ing)?\s+(?:user|personal|customer)\s+data", re.IGNORECASE
+        ),
+        "automated_scanning": re.compile(
+            r"(?:do\s+not|no|never|prohibited)\s+(?:use\s+)?automated\s+(?:scanning|testing|tools?)",
+            re.IGNORECASE,
+        ),
+        "social_media_phishing": re.compile(
+            r"social[\s-]*media[\s-]*(?:phishing|scams?)", re.IGNORECASE
+        ),
+        "website_defacement": re.compile(r"(?:website\s+)?deface(?:ment|ing)", re.IGNORECASE),
+        "ransomware": re.compile(r"ransomware", re.IGNORECASE),
+        "port_scanning_out_of_scope": re.compile(
+            r"port[\s-]*scan(?:ning)?\s+(?:of|on|against)\s+(?:systems?\s+)?(?:outside|out[\s-]*of[\s-]*scope)",
+            re.IGNORECASE,
+        ),
+    }
+
+    _KNOWN_ALLOWED_TEST_TYPES: dict[str, re.Pattern[str]] = {
+        "web_application_testing": re.compile(
+            r"web[\s-]*(?:application|app)[\s-]*test(?:ing)?", re.IGNORECASE
+        ),
+        "api_testing": re.compile(r"\bapi[\s-]*test(?:ing)?", re.IGNORECASE),
+        "authenticated_testing": re.compile(
+            r"authenticated[\s-]*test(?:ing)?(?:\s+with\s+test\s+accounts?)?", re.IGNORECASE
+        ),
+        "non_destructive_testing": re.compile(
+            r"non[\s-]*destructive[\s-]*test(?:ing)?", re.IGNORECASE
+        ),
+        "rate_limited_automated_testing": re.compile(
+            r"rate[\s-]*limited?\s+automated\s+test(?:ing)?", re.IGNORECASE
+        ),
+        "test_accounts": re.compile(r"(?:create|use|register)\s+test\s+accounts?", re.IGNORECASE),
+        "manual_testing": re.compile(r"manual[\s-]*test(?:ing)?", re.IGNORECASE),
+        "code_review": re.compile(r"(?:code|source)[\s-]*review", re.IGNORECASE),
+        "configuration_analysis": re.compile(r"configuration[\s-]*analysis", re.IGNORECASE),
+        "vulnerability_scanning": re.compile(r"vulnerability[\s-]*scan(?:ning)?", re.IGNORECASE),
+    }
+
+    def _extract_test_types(self, text: str, *, kind: str = "prohibited") -> list[str]:
+        """Extract test types from policy text.
+
+        Args:
+            text: The clean policy text.
+            kind: "allowed" or "prohibited" — which types to extract.
+
+        Returns:
+            List of matched test type keys (no duplicates).
+        """
+        patterns = (
+            self._KNOWN_PROHIBITED_TEST_TYPES
+            if kind == "prohibited"
+            else self._KNOWN_ALLOWED_TEST_TYPES
+        )
+        found: list[str] = []
+        seen: set[str] = set()
+
+        for key, pattern in patterns.items():
+            if pattern.search(text) and key not in seen:
+                found.append(key)
+                seen.add(key)
+
+        return found
 
     def _extract_rules(self, text: str) -> list[PolicyRule]:
         """Extract testing rules from policy text.

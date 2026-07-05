@@ -76,13 +76,17 @@ class RateLimit(BaseModel):
 
     Attributes:
         requests_per_second: Max requests per second (float for fractional limits).
+        requests_per_minute: Max requests per minute.
         requests_per_hour: Max requests per hour.
+        requests_per_day: Max requests per day.
         concurrent_requests: Max concurrent connections.
         auto_throttle: Whether to automatically throttle to these limits.
     """
 
     requests_per_second: float | None = Field(default=None, ge=0)
+    requests_per_minute: int | None = Field(default=None, ge=0)
     requests_per_hour: int | None = Field(default=None, ge=0)
+    requests_per_day: int | None = Field(default=None, ge=0)
     concurrent_requests: int | None = Field(default=None, ge=0)
     auto_throttle: bool = Field(default=True)
 
@@ -101,6 +105,43 @@ class PolicyRule(BaseModel):
     is_blocking: bool = Field(default=False, description="Block violation automatically")
 
 
+class AutomationPolicy(BaseModel):
+    """Describes the automation policy extracted from a bug bounty program.
+
+    Attributes:
+        status: One of "allowed", "prohibited", "requires_approval", or "unknown".
+            Conservative by default: if nothing is found, it is "unknown".
+        evidence: The text snippet that led to this classification.
+    """
+
+    status: str = Field(
+        default="unknown", description="allowed | prohibited | requires_approval | unknown"
+    )
+    evidence: str | None = Field(
+        default=None, description="Snippet that led to this classification"
+    )
+
+    @property
+    def is_allowed(self) -> bool:
+        """Automation is explicitly allowed."""
+        return self.status == "allowed"
+
+    @property
+    def is_prohibited(self) -> bool:
+        """Automation is explicitly prohibited."""
+        return self.status == "prohibited"
+
+    @property
+    def requires_approval(self) -> bool:
+        """Automation requires prior human or program approval."""
+        return self.status == "requires_approval"
+
+    @property
+    def is_unknown(self) -> bool:
+        """Automation policy is unknown (nothing found in the policy text)."""
+        return self.status == "unknown"
+
+
 class ScopePolicy(BaseModel):
     """Complete parsed bug bounty program policy.
 
@@ -116,6 +157,9 @@ class ScopePolicy(BaseModel):
         out_of_scope: Assets that are explicitly excluded.
         rate_limits: Rate-limit configuration (None if not specified).
         rules: Policy rules extracted from the text.
+        automation_policy: Automation-policy classification (default: unknown).
+        allowed_test_types: Test types explicitly allowed by the policy.
+        prohibited_test_types: Test types explicitly prohibited by the policy.
         raw_text: The original, unmodified policy text (for audit trail).
     """
 
@@ -127,6 +171,9 @@ class ScopePolicy(BaseModel):
     out_of_scope: list[ScopeEntry] = Field(default_factory=list)
     rate_limits: RateLimit | None = Field(default=None)
     rules: list[PolicyRule] = Field(default_factory=list)
+    automation_policy: AutomationPolicy = Field(default_factory=AutomationPolicy)
+    allowed_test_types: list[str] = Field(default_factory=list)
+    prohibited_test_types: list[str] = Field(default_factory=list)
     raw_text: str = Field(default="", description="Original policy text for audit trail")
 
     def is_in_scope(self, target: str) -> bool:
