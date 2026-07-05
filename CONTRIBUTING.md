@@ -44,7 +44,7 @@ Siehe [CODE_CONVENTIONS.md](./docs/standards/CODE_CONVENTIONS.md) fuer die volls
 | Bereich | Tool / Regel |
 |---------|-------------|
 | Sprache | Python 3.11+ |
-| Package-Manager | `uv` (empfohlen) oder `poetry` |
+| Package-Manager | `hatchling` (Build Backend) + `pip`/`venv` (Baseline) + `uv` (optionaler Runner) |
 | Linting | `ruff` |
 | Formatting | `ruff format` |
 | Type Checking | `mypy --strict` |
