@@ -386,4 +386,26 @@ Priorität 9 (Reporting):
 
 ---
 
+---
+
+## 11. Governance Polish 2026-07-05
+
+Am 2026-07-05 wurde ein Governance-Polish-Lauf durchgeführt:
+
+- **49 Issue-Bodies** auf das neue Ziel-Template normalisiert (Ziel, Rolle, Sicherheitsklasse, Nicht-Ziele, Verification Contract, Safety Notes, Next-Step-Handoff)
+- **Alte Architekturbegriffe** („NEUTRINO AI") bereinigt
+- **Abhängigkeiten** auf neue Komponentennamen aktualisiert
+- **6 neue Issues** erstellt:
+  - #51: GitHub Issue- und PR-Templates
+  - #52: Code-Konventionen und Build-Standard
+  - #53: n8n Workflow-Bridge Grunddesign
+  - #54: n8n Human-in-the-loop Approval Workflow
+  - #55: Paperclip Control-Plane Rollenmodell
+  - #56: Dashboard Projektstatusseite
+
+Details siehe: [Governance Polish Report](./NEUTRINO_GOVERNANCE_POLISH_REPORT.md)
+
+---
+
 *Report erstellt am 2026-07-04 durch Issue Orchestrator im Rahmen des Reality Refresh*
+*Governance Polish Update 2026-07-05*
