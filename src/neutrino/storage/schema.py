@@ -9,7 +9,7 @@ No ORM, no code generation — explicit SQL only.
 
 from __future__ import annotations
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 TABLES = [
     "programs",
@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS human_approvals (
     actor TEXT NOT NULL,
     decision TEXT NOT NULL,
     reason TEXT,
+    action TEXT NOT NULL DEFAULT '',
+    target TEXT NOT NULL DEFAULT '',
+    scope_reference TEXT NOT NULL DEFAULT '',
+    test_type TEXT NOT NULL DEFAULT '',
+    risk_summary TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (research_run_id) REFERENCES research_runs(id) ON DELETE SET NULL

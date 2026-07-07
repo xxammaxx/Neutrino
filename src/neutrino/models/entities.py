@@ -233,25 +233,50 @@ class EvidenceUpdate(BaseModel):
 
 
 class HumanApproval(BaseModel):
-    """A human approval decision linked to a ResearchRun."""
+    """A human approval decision linked to a ResearchRun.
+
+    Supports the full Human Authorization Workflow (Issue #4) with
+    ``action``, ``target``, ``scope_reference``, ``test_type``, and
+    ``risk_summary`` fields.
+
+    Decision values:
+        - "pending": awaiting human decision
+        - "approved": explicitly approved by a human
+        - "rejected": explicitly rejected by a human
+    """
 
     id: str
     research_run_id: str | None = None
     actor: str
     decision: str  # "approved", "rejected", "pending"
     reason: str | None = None
+    action: str = ""
+    target: str = ""
+    scope_reference: str = ""
+    test_type: str = ""
+    risk_summary: str = ""
     created_at: str
     updated_at: str
 
 
 class HumanApprovalCreate(BaseModel):
-    """Input for creating a HumanApproval."""
+    """Input for creating a HumanApproval.
+
+    Required: ``id``, ``actor``, ``decision``.
+    Optional but strongly recommended for the Human Authorization Workflow:
+    ``action``, ``target``, ``scope_reference``, ``test_type``, ``risk_summary``.
+    """
 
     id: str
     research_run_id: str | None = None
     actor: str
     decision: str
     reason: str | None = None
+    action: str = ""
+    target: str = ""
+    scope_reference: str = ""
+    test_type: str = ""
+    risk_summary: str = ""
 
 
 class HumanApprovalUpdate(BaseModel):
@@ -261,6 +286,11 @@ class HumanApprovalUpdate(BaseModel):
     actor: str | None = None
     decision: str | None = None
     reason: str | None = None
+    action: str | None = None
+    target: str | None = None
+    scope_reference: str | None = None
+    test_type: str | None = None
+    risk_summary: str | None = None
 
 
 # ------------------------------------------------------------------

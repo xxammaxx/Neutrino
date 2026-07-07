@@ -109,21 +109,21 @@ class TestApplyMigrations:
             for table in TABLES:
                 assert table in names, f"Table '{table}' not found in database"
 
-    def test_schema_version_is_v1(self, db_path: str) -> None:
-        """Schema version is '1' after initial migration."""
+    def test_schema_version_is_v2(self, db_path: str) -> None:
+        """Schema version is '2' after all migrations applied."""
         version = get_schema_version(db_path)
-        assert version == "1"
+        assert version == "2"
 
     def test_migrations_are_idempotent(self, db_path: str) -> None:
         """Running apply_migrations twice does not raise or duplicate."""
         # First run already done in fixture. Second run:
         apply_migrations(db_path)
         version = get_schema_version(db_path)
-        assert version == "1"
-        # Verify no duplicate tables
+        assert version == "2"
+        # Verify no duplicate rows
         with get_connection(db_path) as conn:
             rows = conn.execute("SELECT COUNT(*) as cnt FROM schema_migrations").fetchone()
-            assert rows["cnt"] == 1
+            assert rows["cnt"] == 2  # v1 + v2
 
 
 class TestTableColumns:

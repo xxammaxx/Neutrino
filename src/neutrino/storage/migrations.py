@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-from neutrino.storage.schema import SCHEMA_VERSION, get_schema_ddl
+from neutrino.storage.schema import get_schema_ddl
 from neutrino.storage.sqlite import get_connection
 
 
@@ -50,13 +50,47 @@ def _apply_migration_v1(conn: sqlite3.Connection) -> None:
     timestamp = datetime.now(UTC).isoformat()
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-        (SCHEMA_VERSION, timestamp),
+        ("1", timestamp),
+    )
+
+
+def _apply_migration_v2(conn: sqlite3.Connection) -> None:
+    """Apply migration version 2: extend human_approvals with approval workflow fields.
+
+    Adds ``action``, ``target``, ``scope_reference``, ``test_type``, and
+    ``risk_summary`` columns to support the full Human Authorization Workflow
+    (Issue #4). Columns are added with ``IF NOT EXISTS`` for idempotency.
+
+    Args:
+        conn: Active SQLite connection.
+    """
+    new_columns = [
+        "action TEXT NOT NULL DEFAULT ''",
+        "target TEXT NOT NULL DEFAULT ''",
+        "scope_reference TEXT NOT NULL DEFAULT ''",
+        "test_type TEXT NOT NULL DEFAULT ''",
+        "risk_summary TEXT NOT NULL DEFAULT ''",
+    ]
+    for col_def in new_columns:
+        # SQLite does not support IF NOT EXISTS for ALTER TABLE ADD COLUMN,
+        # but we catch the 'duplicate column' error to be idempotent.
+        try:
+            conn.execute(f"ALTER TABLE human_approvals ADD COLUMN {col_def}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                continue
+            raise
+    timestamp = datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        ("2", timestamp),
     )
 
 
 # Registry of migration callables, keyed by version string.
 _MIGRATIONS: dict[str, Callable[[sqlite3.Connection], None]] = {
     "1": _apply_migration_v1,
+    "2": _apply_migration_v2,
 }
 
 

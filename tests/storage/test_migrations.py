@@ -112,15 +112,15 @@ class TestIdempotency:
             apply_migrations(path)
         assert get_schema_version(path) == SCHEMA_VERSION
 
-    def test_schema_migrations_only_one_row(self) -> None:
-        """schema_migrations table has exactly one row after idempotent runs."""
+    def test_schema_migrations_rows_after_all(self) -> None:
+        """schema_migrations table has exactly 2 rows (v1 + v2) after all migrations."""
         path = get_temp_db_path()
         for _ in range(5):
             apply_migrations(path)
 
         with get_connection(path) as conn:
             row = conn.execute("SELECT COUNT(*) as cnt FROM schema_migrations").fetchone()
-            assert row["cnt"] == 1
+            assert row["cnt"] == 2
 
 
 # ------------------------------------------------------------------

@@ -34,9 +34,23 @@ class HumanApprovalRepository(BaseRepository):
         now = self._now_iso()
         sql = (
             "INSERT INTO human_approvals (id, research_run_id, actor, decision, "
-            "reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "reason, action, target, scope_reference, test_type, risk_summary, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        params = (data.id, data.research_run_id, data.actor, data.decision, data.reason, now, now)
+        params = (
+            data.id,
+            data.research_run_id,
+            data.actor,
+            data.decision,
+            data.reason,
+            data.action,
+            data.target,
+            data.scope_reference,
+            data.test_type,
+            data.risk_summary,
+            now,
+            now,
+        )
         try:
             self._execute_write(sql, params)
         except sqlite3.IntegrityError as e:
