@@ -1,0 +1,218 @@
+{
+  "$defs": {
+    "ValidationSafetyClass": {
+      "description": "Safety classification for recipes and steps.\n\nOnly ``non_destructive`` is accepted. All other values or\nmissing classification \u2192 validation failure.",
+      "enum": [
+        "non_destructive"
+      ],
+      "title": "ValidationSafetyClass",
+      "type": "string"
+    },
+    "ValidationStep": {
+      "additionalProperties": false,
+      "description": "A single structured validation step within a recipe.\n\nEach step describes exactly ONE non-destructive validation action.\nEvery step requires a scope reference, approval requirement, and\nexpected evidence specification.\n\nFields:\n    id: Unique step identifier within the recipe.\n    name: Human-readable step name.\n    step_type: Allowlisted step type (see ValidationStepType).\n    target: The target of the validation. Must be loopback or\n        scope-referenced lab placeholder.\n    scope_reference: Reference to the scope policy permitting this\n        target. Must be non-empty and present in recipe scope.\n    requires_approval: Whether human approval is required before\n        executing this step. Must be True for all target-touching steps.\n    expected_evidence: Non-empty list of evidence IDs expected from\n        this step.\n    description: Optional human-readable description.\n    parameters: Optional structured parameters. Must not contain\n        forbidden keys. Validated by the recursive scanner.\n    timeout_seconds: Optional bounded timeout (1-300).\n    destructive: Must be explicitly False.\n    safety_class: Must be \"non_destructive\".",
+      "properties": {
+        "id": {
+          "description": "Unique step identifier",
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Human-readable step name",
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "step_type": {
+          "$ref": "#/$defs/ValidationStepType",
+          "description": "Allowlisted step type"
+        },
+        "target": {
+          "description": "Target of the validation step",
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        },
+        "scope_reference": {
+          "description": "Scope policy reference (must be in recipe scope)",
+          "minLength": 1,
+          "title": "Scope Reference",
+          "type": "string"
+        },
+        "requires_approval": {
+          "default": true,
+          "description": "Whether human approval is required before execution",
+          "title": "Requires Approval",
+          "type": "boolean"
+        },
+        "expected_evidence": {
+          "description": "Non-empty list of expected evidence IDs",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Expected Evidence",
+          "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional description",
+          "title": "Description"
+        },
+        "parameters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional structured parameters",
+          "title": "Parameters"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "maximum": 300,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional bounded timeout in seconds (1-300)",
+          "title": "Timeout Seconds"
+        },
+        "destructive": {
+          "default": false,
+          "description": "Must be False \u2014 destructive steps are always rejected",
+          "title": "Destructive",
+          "type": "boolean"
+        },
+        "safety_class": {
+          "$ref": "#/$defs/ValidationSafetyClass",
+          "default": "non_destructive",
+          "description": "Safety classification \u2014 must be non_destructive"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "step_type",
+        "target",
+        "scope_reference",
+        "expected_evidence"
+      ],
+      "title": "ValidationStep",
+      "type": "object"
+    },
+    "ValidationStepType": {
+      "description": "Allowed step types for validation recipes.\n\nThis is a NARROW allowlist. Unknown step types must fail validation.\nNo generic command, scanner, exploit, or script types are permitted.\n\nStep types:\n    http_check:\n        A safe HTTP GET/HEAD request against a localhost target.\n        No body, no auth, no redirects.\n    tcp_check:\n        A connect-only TCP check against a localhost target.\n        No data sent, no banner-grabbing.\n    evidence_check:\n        Checks existing local evidence by ID. No external URLs.\n    manual_observation:\n        Human-readable checklist item \u2014 never auto-executed.\n    local_fixture_check:\n        Validates a local test fixture by ID. No arbitrary paths.",
+      "enum": [
+        "http_check",
+        "tcp_check",
+        "evidence_check",
+        "manual_observation",
+        "local_fixture_check"
+      ],
+      "title": "ValidationStepType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "JSON Schema for Neutrino Validation Recipes. WARNING: This schema is a helper artifact. The Python validator in neutrino.validation_recipe.validators is the source of truth for safety validation.",
+  "properties": {
+    "id": {
+      "description": "Unique recipe identifier",
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "description": "Human-readable recipe name",
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "version": {
+      "description": "Structured version (e.g., '1.0')",
+      "minLength": 1,
+      "title": "Version",
+      "type": "string"
+    },
+    "description": {
+      "description": "Human-readable description",
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "scope_references": {
+      "description": "Non-empty list of scope policy references",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Scope References",
+      "type": "array"
+    },
+    "steps": {
+      "description": "Non-empty list of validation steps",
+      "items": {
+        "$ref": "#/$defs/ValidationStep"
+      },
+      "minItems": 1,
+      "title": "Steps",
+      "type": "array"
+    },
+    "created_at": {
+      "description": "ISO 8601 creation timestamp",
+      "minLength": 1,
+      "title": "Created At",
+      "type": "string"
+    },
+    "safety_class": {
+      "$ref": "#/$defs/ValidationSafetyClass",
+      "default": "non_destructive",
+      "description": "Must be non_destructive"
+    },
+    "destructive": {
+      "default": false,
+      "description": "Must be False \u2014 destructive recipes are always rejected",
+      "title": "Destructive",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "description": "Schema version for this recipe format",
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "version",
+    "description",
+    "scope_references",
+    "steps",
+    "created_at"
+  ],
+  "title": "ValidationRecipe",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
